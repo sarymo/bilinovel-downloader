@@ -41,6 +41,7 @@ func GetNovel(novelId int) (*model.Novel, error) {
 
 	novel.Title = strings.TrimSpace(doc.Find(".book-title").First().Text())
 	novel.Description = strings.TrimSpace(doc.Find(".book-summary>content").First().Text())
+	novel.Id = novelId
 
 	doc.Find(".authorname>a").Each(func(i int, s *goquery.Selection) {
 		novel.Authors = append(novel.Authors, strings.TrimSpace(s.Text()))
@@ -49,7 +50,7 @@ func GetNovel(novelId int) (*model.Novel, error) {
 		novel.Authors = append(novel.Authors, strings.TrimSpace(s.Text()))
 	})
 
-	volumes, err := GetNovelVolumes(novelId)
+	volumes, err := getNovelVolumes(novelId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get novel volumes: %v", err)
 	}
@@ -59,7 +60,7 @@ func GetNovel(novelId int) (*model.Novel, error) {
 }
 
 func GetVolume(novelId int, volumeId int) (*model.Volume, error) {
-	novelUrl := fmt.Sprintf("https://www.bilinovel.com/novel/%v/vol_%v.html", novelId, volumeId)
+	novelUrl := fmt.Sprintf("https://www.bilinovel.com/novel/%v/catalog", novelId)
 	resp, err := utils.Request().Get(novelUrl)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get novel info: %v", err)
@@ -73,11 +74,42 @@ func GetVolume(novelId int, volumeId int) (*model.Volume, error) {
 		return nil, fmt.Errorf("failed to parse html: %v", err)
 	}
 
+	seriesIdx := 0
+	doc.Find("a.volume-cover-img").Each(func(i int, s *goquery.Selection) {
+		if s.AttrOr("href", "") == fmt.Sprintf("/novel/%v/vol_%v.html", novelId, volumeId) {
+			seriesIdx = i + 1
+		}
+	})
+
+	novelTitle := strings.TrimSpace(doc.Find(".book-title").First().Text())
+
+	if seriesIdx == 0 {
+		return nil, fmt.Errorf("volume not found: %v", volumeId)
+	}
+
+	volumeUrl := fmt.Sprintf("https://www.bilinovel.com/novel/%v/vol_%v.html", novelId, volumeId)
+	resp, err = utils.Request().Get(volumeUrl)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get novel info: %v", err)
+	}
+	if resp.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("failed to get novel info: %v", resp.Status())
+	}
+
+	doc, err = goquery.NewDocumentFromReader(bytes.NewReader(resp.Body()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse html: %v", err)
+	}
+
 	volume := &model.Volume{}
+	volume.NovelId = novelId
+	volume.NovelTitle = novelTitle
+	volume.Id = volumeId
+	volume.SeriesIdx = seriesIdx
 	volume.Title = strings.TrimSpace(doc.Find(".book-title").First().Text())
 	volume.Description = strings.TrimSpace(doc.Find(".book-summary>content").First().Text())
 	volume.Cover = doc.Find(".book-cover").First().AttrOr("src", "")
-	volume.Url = novelUrl
+	volume.Url = volumeUrl
 	volume.Chapters = make([]*model.Chapter, 0)
 
 	doc.Find(".authorname>a").Each(func(i int, s *goquery.Selection) {
@@ -97,7 +129,7 @@ func GetVolume(novelId int, volumeId int) (*model.Volume, error) {
 	return volume, nil
 }
 
-func GetNovelVolumes(novelId int) ([]*model.Volume, error) {
+func getNovelVolumes(novelId int) ([]*model.Volume, error) {
 	catelogUrl := fmt.Sprintf("https://www.bilinovel.com/novel/%v/catalog", novelId)
 	resp, err := utils.Request().Get(catelogUrl)
 	if err != nil {
@@ -124,7 +156,7 @@ func GetNovelVolumes(novelId int) ([]*model.Volume, error) {
 	})
 
 	volumes := make([]*model.Volume, 0)
-	for _, volumeIdStr := range volumeIds {
+	for i, volumeIdStr := range volumeIds {
 		volumeId, err := strconv.Atoi(volumeIdStr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert volume id: %v", err)
@@ -133,6 +165,7 @@ func GetNovelVolumes(novelId int) ([]*model.Volume, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to get volume info: %v", err)
 		}
+		volume.SeriesIdx = i
 		volumes = append(volumes, volume)
 	}
 
@@ -496,6 +529,14 @@ func CreateContentOPF(dirPath string, uuid string, volume *model.Volume) error {
 			{
 				Property: "dcterms:modified",
 				Value:    time.Now().UTC().Format("2006-01-02T15:04:05Z"),
+			},
+			{
+				Name:    "calibre:series",
+				Content: volume.NovelTitle,
+			},
+			{
+				Name:    "calibre:series_index",
+				Content: strconv.Itoa(volume.SeriesIdx),
 			},
 		},
 	}

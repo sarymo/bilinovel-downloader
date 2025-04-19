@@ -11,15 +11,20 @@ type Chapter struct {
 }
 
 type Volume struct {
+	Id          int
+	SeriesIdx   int
 	Title       string
 	Url         string
 	Cover       string
 	Description string
 	Authors     []string
 	Chapters    []*Chapter
+	NovelId     int
+	NovelTitle  string
 }
 
 type Novel struct {
+	Id          int
 	Title       string
 	Description string
 	Authors     []string
