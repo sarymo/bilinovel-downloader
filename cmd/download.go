@@ -8,7 +8,9 @@ import (
 )
 
 var downloadCmd = &cobra.Command{
-	Use: "download",
+	Use:   "download",
+	Short: "Download a novel or volume",
+	Long:  "Download a novel or volume",
 }
 
 var downloadNovelCmd = &cobra.Command{
