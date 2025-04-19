@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"bilinovel-downloader/downloader"
+	"bilinovel-downloader/downloader/bilinovel"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -60,7 +60,7 @@ func runDownloadNovel(cmd *cobra.Command, args []string) error {
 	if novelArgs.NovelId == 0 {
 		return fmt.Errorf("novel id is required")
 	}
-	err := downloader.DownloadNovel(novelArgs.NovelId, novelArgs.outputPath)
+	err := bilinovel.DownloadNovel(novelArgs.NovelId, novelArgs.outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to download novel: %v", err)
 	}
@@ -75,7 +75,7 @@ func runDownloadVolume(cmd *cobra.Command, args []string) error {
 	if volumeArgs.VolumeId == 0 {
 		return fmt.Errorf("volume id is required")
 	}
-	err := downloader.DownloadVolume(volumeArgs.NovelId, volumeArgs.VolumeId, volumeArgs.outputPath)
+	err := bilinovel.DownloadVolume(volumeArgs.NovelId, volumeArgs.VolumeId, volumeArgs.outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to download volume: %v", err)
 	}

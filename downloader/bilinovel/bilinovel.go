@@ -1,4 +1,4 @@
-package downloader
+package bilinovel
 
 import (
 	"bilinovel-downloader/model"
@@ -286,6 +286,11 @@ func downloadVolume(volume *model.Volume, outputPath string) error {
 		return fmt.Errorf("failed to render cover: %v", err)
 	}
 
+	err = DownloadFont(filepath.Join(outputPath, "OEBPS/Fonts"))
+	if err != nil {
+		return fmt.Errorf("failed to download font: %v", err)
+	}
+
 	contentsXHTMLPath := filepath.Join(outputPath, "OEBPS/Text/contents.xhtml")
 	err = os.MkdirAll(path.Dir(contentsXHTMLPath), 0755)
 	if err != nil {
@@ -331,7 +336,7 @@ func downloadVolume(volume *model.Volume, outputPath string) error {
 		return fmt.Errorf("failed to create toc ncx: %v", err)
 	}
 
-	err = utils.CreateEpub(outputPath)
+	err = CreateEpub(outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to create epub: %v", err)
 	}
@@ -407,6 +412,7 @@ func downloadChapterByPage(page, chapterIdx int, chapter *model.Chapter, outputP
 	content.Find(".cgo").Remove()
 	content.Find("center").Remove()
 	content.Find(".google-auto-placed").Remove()
+	content.Find("p").Last().AddClass("read-font")
 
 	content.Find("img").Each(func(i int, s *goquery.Selection) {
 		if err != nil {
@@ -549,20 +555,25 @@ func CreateContentOPF(dirPath string, uuid string, volume *model.Volume) error {
 		Media: "application/x-dtbncx+xml",
 	})
 	manifest.Items = append(manifest.Items, model.ManifestItem{
-		ID:    "cover",
+		ID:    "cover.xhtml",
 		Link:  "Text/cover.xhtml",
 		Media: "application/xhtml+xml",
 	})
 	manifest.Items = append(manifest.Items, model.ManifestItem{
-		ID:         "contents",
+		ID:         "contents.xhtml",
 		Link:       "Text/contents.xhtml",
 		Media:      "application/xhtml+xml",
 		Properties: "nav",
 	})
 	manifest.Items = append(manifest.Items, model.ManifestItem{
-		ID:    "images-cover",
+		ID:    "images-cover" + path.Ext(volume.Cover),
 		Link:  fmt.Sprintf("Images/cover%s", path.Ext(volume.Cover)),
 		Media: fmt.Sprintf("image/%s", strings.ReplaceAll(strings.TrimPrefix(path.Ext(volume.Cover), "."), "jpg", "jpeg")),
+	})
+	manifest.Items = append(manifest.Items, model.ManifestItem{
+		ID:    "read.woff2",
+		Link:  "Fonts/read.woff2",
+		Media: "font/woff2",
 	})
 	for _, chapter := range volume.Chapters {
 		manifest.Items = append(manifest.Items, model.ManifestItem{
@@ -653,5 +664,26 @@ func CreateTocNCX(dirPath string, uuid string, volume *model.Volume) error {
 	if err != nil {
 		return fmt.Errorf("failed to render toc: %v", err)
 	}
+	return nil
+}
+
+func DownloadFont(outputPath string) error {
+	log.Printf("Downloading Font: read.woff2")
+
+	fontPath := filepath.Join(outputPath, "read.woff2")
+	err := os.MkdirAll(path.Dir(fontPath), 0755)
+	if err != nil {
+		return fmt.Errorf("failed to create font directory: %v", err)
+	}
+
+	resp, err := utils.Request().Get("https://www.bilinovel.com/public/font/read.woff2")
+	if err != nil {
+		return fmt.Errorf("failed to download font: %v", err)
+	}
+	err = os.WriteFile(fontPath, resp.Body(), 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write font: %v", err)
+	}
+
 	return nil
 }

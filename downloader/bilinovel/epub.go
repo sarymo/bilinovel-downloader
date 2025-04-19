@@ -1,14 +1,16 @@
-package utils
+package bilinovel
 
 import (
 	"archive/zip"
-	"bilinovel-downloader/template"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 )
 
 func CreateEpub(path string) error {
+	log.Printf("Creating epub for %s", path)
+
 	savePath := path + ".epub"
 	zipFile, err := os.Create(savePath)
 	if err != nil {
@@ -29,7 +31,7 @@ func CreateEpub(path string) error {
 		return err
 	}
 
-	err = addStringToZip(zipWriter, "OEBPS/Styles/style.css", template.StyleCSS, zip.Deflate)
+	err = addStringToZip(zipWriter, "OEBPS/Styles/style.css", StyleCSS, zip.Deflate)
 	if err != nil {
 		return err
 	}

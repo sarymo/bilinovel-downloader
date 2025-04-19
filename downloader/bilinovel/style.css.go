@@ -1,6 +1,15 @@
-package template
+package bilinovel
 
 const StyleCSS = `
+@font-face{
+    font-family: "read";
+    src: url(../Fonts/read.woff2);
+}
+
+.read-font{
+    font-family: "read" !important;
+}
+
 body > div {
   margin: 0 auto;
   padding: 20px;

@@ -8,6 +8,7 @@ require (
 	github.com/go-resty/resty/v2 v2.16.5
 	github.com/google/uuid v1.6.0
 	github.com/spf13/cobra v1.9.1
+	golang.org/x/text v0.24.0
 )
 
 require (
