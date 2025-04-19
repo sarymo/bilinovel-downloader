@@ -1,0 +1,33 @@
+package template
+
+import "bilinovel-downloader/model"
+
+templ ContentOPF(uniqueIdentifier string, dc *model.DublinCoreMetadata, manifest *model.Manifest, spine *model.Spine, guide *model.Guide) {
+	@templ.Raw(`<?xml version="1.0"  encoding="UTF-8"?>`)
+	<package version="3.0" xmlns="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/" unique-identifier={ uniqueIdentifier }>
+		if dc != nil {
+			{{ metadata, err := dc.Marshal() }}
+			if err == nil {
+				@templ.Raw(metadata)
+			}
+		}
+		if manifest != nil {
+			{{ manifest, err := manifest.Marshal() }}
+			if err == nil {
+				@templ.Raw(manifest)
+			}
+		}
+		if spine != nil {
+			{{ spine, err := spine.Marshal() }}
+			if err == nil {
+				@templ.Raw(spine)
+			}
+		}
+		if guide != nil {
+			{{ guide, err := guide.Marshal() }}
+			if err == nil {
+				@templ.Raw(guide)
+			}
+		}
+	</package>
+}
