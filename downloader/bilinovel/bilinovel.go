@@ -427,15 +427,12 @@ func downloadChapterByPage(page, chapterIdx int, chapter *model.Chapter, outputP
 			}
 		}
 
-		fileName := filepath.Join(imgSavePath, fmt.Sprintf("%03v%s", i+1, path.Ext(imgUrl)))
+		fileName := filepath.Join(imgSavePath, fmt.Sprintf("%03v%s", len(chapter.ImageFullPaths)+1, path.Ext(imgUrl)))
 		err = DownloadImg(imgUrl, filepath.Join(outputPath, fileName))
 		if err == nil {
 			s.SetAttr("src", "../"+strings.TrimPrefix(fileName, "OEBPS/"))
 			s.RemoveAttr("class")
 			s.RemoveAttr("data-src")
-			if s.AttrOr("alt", "") == "" {
-				s.SetAttr("alt", fmt.Sprintf("image-%03d", i+1))
-			}
 			chapter.ImageFullPaths = append(chapter.ImageFullPaths, filepath.Join(outputPath, fileName))
 			chapter.ImageOEBPSPaths = append(chapter.ImageOEBPSPaths, strings.TrimPrefix(fileName, "OEBPS/"))
 		}
