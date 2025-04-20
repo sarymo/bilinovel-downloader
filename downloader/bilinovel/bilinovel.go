@@ -6,6 +6,7 @@ import (
 	"bilinovel-downloader/utils"
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -530,7 +531,7 @@ func CreateContentOPF(dirPath string, uuid string, volume *model.Volume) error {
 		Metas: []model.DublinCoreMeta{
 			{
 				Name:    "cover",
-				Content: fmt.Sprintf("Images/cover%s", path.Ext(volume.Cover)),
+				Content: "images-cover" + path.Ext(volume.Cover),
 			},
 			{
 				Property: "dcterms:modified",
@@ -571,9 +572,9 @@ func CreateContentOPF(dirPath string, uuid string, volume *model.Volume) error {
 		Media: fmt.Sprintf("image/%s", strings.ReplaceAll(strings.TrimPrefix(path.Ext(volume.Cover), "."), "jpg", "jpeg")),
 	})
 	manifest.Items = append(manifest.Items, model.ManifestItem{
-		ID:    "read.woff2",
-		Link:  "Fonts/read.woff2",
-		Media: "font/woff2",
+		ID:    "read.ttf",
+		Link:  "Fonts/read.ttf",
+		Media: "application/vnd.ms-opentype",
 	})
 	for _, chapter := range volume.Chapters {
 		manifest.Items = append(manifest.Items, model.ManifestItem{
@@ -667,20 +668,19 @@ func CreateTocNCX(dirPath string, uuid string, volume *model.Volume) error {
 	return nil
 }
 
-func DownloadFont(outputPath string) error {
-	log.Printf("Downloading Font: read.woff2")
+//go:embed read.ttf
+var readTTF []byte
 
-	fontPath := filepath.Join(outputPath, "read.woff2")
+func DownloadFont(outputPath string) error {
+	log.Printf("Writing Font: %s", outputPath)
+
+	fontPath := filepath.Join(outputPath, "read.ttf")
 	err := os.MkdirAll(path.Dir(fontPath), 0755)
 	if err != nil {
 		return fmt.Errorf("failed to create font directory: %v", err)
 	}
 
-	resp, err := utils.Request().Get("https://www.bilinovel.com/public/font/read.woff2")
-	if err != nil {
-		return fmt.Errorf("failed to download font: %v", err)
-	}
-	err = os.WriteFile(fontPath, resp.Body(), 0644)
+	err = os.WriteFile(fontPath, readTTF, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to write font: %v", err)
 	}

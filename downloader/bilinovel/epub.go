@@ -83,6 +83,9 @@ func addStringToZip(zipWriter *zip.Writer, relPath, content string, method uint1
 
 func addDirContentToZip(zipWriter *zip.Writer, dirPath string, method uint16) error {
 	return filepath.Walk(dirPath, func(filePath string, info os.FileInfo, err error) error {
+		if filepath.Base(filePath) == "volume.json" {
+			return nil
+		}
 		if err != nil {
 			return err
 		}

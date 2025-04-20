@@ -1,13 +1,13 @@
 package bilinovel
 
 const StyleCSS = `
-@font-face{
-    font-family: "read";
-    src: url(../Fonts/read.woff2);
+@font-face {
+  font-family: "MI LANTING";
+  src: url(../Fonts/read.ttf);
 }
 
-.read-font{
-    font-family: "read" !important;
+.read-font {
+  font-family: "MI LANTING", serif !important;
 }
 
 body > div {
