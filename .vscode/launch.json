@@ -2,12 +2,20 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug download volume",
+      "name": "volume",
       "type": "go",
       "request": "launch",
       "mode": "auto",
       "program": "${workspaceFolder}",
       "args": ["download", "volume", "-n", "2013", "-v", "165880"]
+    },
+    {
+      "name": "novel",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "args": ["download", "novel", "-n", "4325"]
     }
   ]
 }

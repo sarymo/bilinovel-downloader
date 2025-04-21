@@ -413,7 +413,9 @@ func downloadChapterByPage(page, chapterIdx int, chapter *model.Chapter, outputP
 	content.Find(".cgo").Remove()
 	content.Find("center").Remove()
 	content.Find(".google-auto-placed").Remove()
-	content.Find("p").Last().AddClass("read-font")
+	if strings.Contains(resp.String(), `font-family: "read"`) {
+		content.Find("p").Last().AddClass("read-font")
+	}
 
 	content.Find("img").Each(func(i int, s *goquery.Selection) {
 		if err != nil {
