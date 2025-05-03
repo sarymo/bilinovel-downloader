@@ -1,24 +1,27 @@
-# BiliNovel Downloader
+# Bilinovel Downloader
 
-这是一个用于下载和生成轻小说 EPUB 电子书的工具。
+这是一个用于从 Bilinovel 下载和生成轻小说 EPUB 电子书的工具。
+生成的 EPUB 文件完全符合 EPUB 标准，可以在 Calibre 检查中无错误通过。
 
-## 功能特点
+## 使用示例
 
-- 支持下载轻小说并转换为标准 EPUB 格式
-- 自动处理图片和文本内容
-- 生成符合 EPUB 3.0 规范的电子书文件
-- 支持多章节内容的组织和管理
-- 保留原有插图和排版格式
+1. 下载整本 `https://www.bilinovel.com/novel/2388.html`
 
-## 使用说明
+   ```bash
+   bilinovel-downloader download novel -n 2388
+   ```
 
-1. 确保系统环境满足要求
-2. 运行下载器获取小说内容
-3. 程序会自动处理并生成标准格式的 EPUB 文件
-4. 生成的电子书文件可以在任何支持 EPUB 3.0 的阅读器中打开
+2. 下载单卷 `https://www.bilinovel.com/novel/2388/vol_84522.html`
+
+   ```bash
+   bilinovel-downloader download volume -n 2388 -v 84522
+   ```
+
+3. 对自动生成的 epub 格式不满意可以自行修改后使用命令打包
+   ```bash
+   bilinovel-downloader pack -d <目录路径>
+   ```
 
 ## 注意事项
 
-- 生成的 EPUB 文件严格遵循 EPUB 3.0 规范
-- 建议使用支持 EPUB 3.0 的阅读器以获得最佳阅读体验
-- 请遵守相关法律法规，合理使用下载的内容
+如果使用 [Kavita](https://github.com/Kareadita/Kavita) 阅读可能出现部分文字乱码问题，这是 Kavita 对 EPUB 格式支持不足导致的，目前在等待修复。
