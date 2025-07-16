@@ -3,7 +3,7 @@ package template
 import "bilinovel-downloader/model"
 
 templ TocNCX(title string, head *model.TocNCXHead, navMap *model.NavMap) {
-	@templ.Raw(`<?xml version="1.0" encoding="UTF-8"?>`)
+	@templ.Raw(`<?xml version='1.0' encoding='utf-8'?>`)
 	@templ.Raw(`<!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">`)
 	<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
 		if head != nil {

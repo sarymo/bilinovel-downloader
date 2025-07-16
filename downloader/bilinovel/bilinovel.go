@@ -518,7 +518,7 @@ func CreateContentOPF(dirPath string, uuid string, volume *model.Volume) error {
 		},
 		Languages: []model.DCLanguage{
 			{
-				Value: "zh-TW",
+				Value: "zh-CN",
 			},
 		},
 		Descriptions: []model.DCDescription{

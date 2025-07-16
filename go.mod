@@ -4,7 +4,7 @@ go 1.24.2
 
 require (
 	github.com/PuerkitoBio/goquery v1.10.3
-	github.com/a-h/templ v0.3.857
+	github.com/a-h/templ v0.3.906
 	github.com/go-resty/resty/v2 v2.16.5
 	github.com/google/uuid v1.6.0
 	github.com/spf13/cobra v1.9.1
