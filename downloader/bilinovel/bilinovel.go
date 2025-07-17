@@ -260,7 +260,7 @@ func downloadVolume(volume *model.Volume, outputPath string) error {
 		return fmt.Errorf("failed to write volume: %v", err)
 	}
 
-	coverPath := filepath.Join(outputPath, "OEBPS/Images/cover.jpg")
+	coverPath := filepath.Join(outputPath, "cover.jpeg")
 	err = os.MkdirAll(path.Dir(coverPath), 0755)
 	if err != nil {
 		return fmt.Errorf("failed to create cover directory: %v", err)
@@ -279,10 +279,7 @@ func downloadVolume(volume *model.Volume, outputPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create cover file: %v", err)
 	}
-	err = template.ContentXHTML(&model.Chapter{
-		Title:   "封面",
-		Content: fmt.Sprintf(`<img src="../Images/cover%s" />`, path.Ext(volume.Cover)),
-	}).Render(context.Background(), file)
+	err = template.CoverXHTML(fmt.Sprintf(`../../cover%s`, strings.ReplaceAll(path.Ext(volume.Cover), "jpg", "jpeg"))).Render(context.Background(), file)
 	if err != nil {
 		return fmt.Errorf("failed to render cover: %v", err)
 	}
@@ -330,11 +327,6 @@ func downloadVolume(volume *model.Volume, outputPath string) error {
 	err = CreateContentOPF(outputPath, u.String(), volume)
 	if err != nil {
 		return fmt.Errorf("failed to create content opf: %v", err)
-	}
-
-	err = CreateTocNCX(outputPath, u.String(), volume)
-	if err != nil {
-		return fmt.Errorf("failed to create toc ncx: %v", err)
 	}
 
 	err = CreateEpub(outputPath)
@@ -530,7 +522,7 @@ func CreateContentOPF(dirPath string, uuid string, volume *model.Volume) error {
 		Metas: []model.DublinCoreMeta{
 			{
 				Name:    "cover",
-				Content: "images-cover" + path.Ext(volume.Cover),
+				Content: "cover",
 			},
 			{
 				Property: "dcterms:modified",
@@ -550,41 +542,37 @@ func CreateContentOPF(dirPath string, uuid string, volume *model.Volume) error {
 		Items: make([]model.ManifestItem, 0),
 	}
 	manifest.Items = append(manifest.Items, model.ManifestItem{
-		ID:    "ncx",
-		Link:  "toc.ncx",
-		Media: "application/x-dtbncx+xml",
-	})
-	manifest.Items = append(manifest.Items, model.ManifestItem{
 		ID:    "cover.xhtml",
-		Link:  "Text/cover.xhtml",
+		Link:  "OEBPS/Text/cover.xhtml",
 		Media: "application/xhtml+xml",
 	})
 	manifest.Items = append(manifest.Items, model.ManifestItem{
 		ID:         "contents.xhtml",
-		Link:       "Text/contents.xhtml",
+		Link:       "OEBPS/Text/contents.xhtml",
 		Media:      "application/xhtml+xml",
 		Properties: "nav",
 	})
 	manifest.Items = append(manifest.Items, model.ManifestItem{
-		ID:    "images-cover" + path.Ext(volume.Cover),
-		Link:  fmt.Sprintf("Images/cover%s", path.Ext(volume.Cover)),
-		Media: fmt.Sprintf("image/%s", strings.ReplaceAll(strings.TrimPrefix(path.Ext(volume.Cover), "."), "jpg", "jpeg")),
+		ID:         "cover",
+		Link:       fmt.Sprintf("cover%s", strings.ReplaceAll(path.Ext(volume.Cover), "jpg", "jpeg")),
+		Media:      fmt.Sprintf("image/%s", strings.ReplaceAll(strings.TrimPrefix(path.Ext(volume.Cover), "."), "jpg", "jpeg")),
+		Properties: "cover-image",
 	})
 	manifest.Items = append(manifest.Items, model.ManifestItem{
 		ID:    "read.ttf",
-		Link:  "Fonts/read.ttf",
+		Link:  "OEBPS/Fonts/read.ttf",
 		Media: "application/vnd.ms-opentype",
 	})
 	for _, chapter := range volume.Chapters {
 		manifest.Items = append(manifest.Items, model.ManifestItem{
 			ID:    path.Base(chapter.TextOEBPSPath),
-			Link:  chapter.TextOEBPSPath,
+			Link:  "OEBPS/" + chapter.TextOEBPSPath,
 			Media: "application/xhtml+xml",
 		})
 		for _, image := range chapter.ImageOEBPSPaths {
 			item := model.ManifestItem{
 				ID:   strings.Join(strings.Split(strings.ToLower(image), string(filepath.Separator)), "-"),
-				Link: image,
+				Link: "OEBPS/" + image,
 			}
 			item.Media = fmt.Sprintf("image/%s", strings.ReplaceAll(strings.TrimPrefix(path.Ext(volume.Cover), "."), "jpg", "jpeg"))
 			manifest.Items = append(manifest.Items, item)
@@ -592,7 +580,7 @@ func CreateContentOPF(dirPath string, uuid string, volume *model.Volume) error {
 	}
 	manifest.Items = append(manifest.Items, model.ManifestItem{
 		ID:    "style",
-		Link:  "Styles/style.css",
+		Link:  "style.css",
 		Media: "text/css",
 	})
 
@@ -606,7 +594,7 @@ func CreateContentOPF(dirPath string, uuid string, volume *model.Volume) error {
 			})
 		}
 	}
-	contentOPFPath := filepath.Join(dirPath, "OEBPS/content.opf")
+	contentOPFPath := filepath.Join(dirPath, "content.opf")
 	err := os.MkdirAll(path.Dir(contentOPFPath), 0755)
 	if err != nil {
 		return fmt.Errorf("failed to create content directory: %v", err)
@@ -618,51 +606,6 @@ func CreateContentOPF(dirPath string, uuid string, volume *model.Volume) error {
 	err = template.ContentOPF("book-id", dc, manifest, spine, nil).Render(context.Background(), file)
 	if err != nil {
 		return fmt.Errorf("failed to render content: %v", err)
-	}
-	return nil
-}
-
-func CreateTocNCX(dirPath string, uuid string, volume *model.Volume) error {
-	navMap := &model.NavMap{Points: make([]*model.NavPoint, 0)}
-	navMap.Points = append(navMap.Points, &model.NavPoint{
-		Id:        "cover",
-		PlayOrder: 1,
-		Label:     "封面",
-		Content:   model.NavPointContent{Src: "Text/cover.xhtml"},
-	})
-	navMap.Points = append(navMap.Points, &model.NavPoint{
-		Id:        "contents",
-		PlayOrder: 2,
-		Label:     "目录",
-		Content:   model.NavPointContent{Src: "Text/contents.xhtml"},
-	})
-	for idx, chapter := range volume.Chapters {
-		navMap.Points = append(navMap.Points, &model.NavPoint{
-			Id:        fmt.Sprintf("chapter-%03v", idx+1),
-			PlayOrder: len(navMap.Points) + 1,
-			Label:     chapter.Title,
-			Content:   model.NavPointContent{Src: chapter.TextOEBPSPath},
-		})
-	}
-
-	head := &model.TocNCXHead{
-		Meta: []model.TocNCXHeadMeta{
-			{Name: "dtb:uid", Content: fmt.Sprintf("urn:uuid:%s", uuid)},
-		},
-	}
-
-	ncxPath := filepath.Join(dirPath, "OEBPS/toc.ncx")
-	err := os.MkdirAll(path.Dir(ncxPath), 0755)
-	if err != nil {
-		return fmt.Errorf("failed to create toc directory: %v", err)
-	}
-	file, err := os.Create(ncxPath)
-	if err != nil {
-		return fmt.Errorf("failed to create toc file: %v", err)
-	}
-	err = template.TocNCX(volume.Title, head, navMap).Render(context.Background(), file)
-	if err != nil {
-		return fmt.Errorf("failed to render toc: %v", err)
 	}
 	return nil
 }

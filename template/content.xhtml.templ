@@ -8,7 +8,7 @@ templ ContentXHTML(content *model.Chapter) {
 	<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="zh-CN">
 		<head>
 			<title>{ content.Title }</title>
-			@templ.Raw(`<link href="../Styles/style.css" rel="stylesheet" type="text/css"/>`)
+			@templ.Raw(`<link href="../../style.css" rel="stylesheet" type="text/css"/>`)
 		</head>
 		<body>
 			<div class="chapter">

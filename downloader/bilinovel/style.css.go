@@ -3,11 +3,15 @@ package bilinovel
 const StyleCSS = `
 @font-face {
   font-family: "MI LANTING";
-  src: url(../Fonts/read.ttf);
+  src: url(OEBPS/Fonts/read.ttf);
 }
 
 .read-font {
-  font-family: "MI LANTING", serif !important;
+  display: block;
+  font-family: "MI LANTING", serif;
+  font-size: 1.33333em;
+  text-indent: 2em;
+  margin: 0.8em 0;
 }
 
 body > div {

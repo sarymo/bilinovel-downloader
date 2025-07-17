@@ -18,10 +18,7 @@
    ```
 
 3. 对自动生成的 epub 格式不满意可以自行修改后使用命令打包
+
    ```bash
    bilinovel-downloader pack -d <目录路径>
    ```
-
-## 注意事项
-
-如果使用 [Kavita](https://github.com/Kareadita/Kavita) 阅读可能出现部分文字乱码问题，这是 Kavita 对 EPUB 格式支持不足导致的，目前在等待修复。

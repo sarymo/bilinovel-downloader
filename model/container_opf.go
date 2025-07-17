@@ -158,7 +158,6 @@ type Spine struct {
 }
 
 func (s *Spine) Marshal() (string, error) {
-	s.Toc = "ncx"
 	xmlBytes, err := xml.Marshal(s)
 	if err != nil {
 		return "", err

@@ -31,7 +31,7 @@ func CreateEpub(path string) error {
 		return err
 	}
 
-	err = addStringToZip(zipWriter, "OEBPS/Styles/style.css", StyleCSS, zip.Deflate)
+	err = addStringToZip(zipWriter, "style.css", StyleCSS, zip.Deflate)
 	if err != nil {
 		return err
 	}
