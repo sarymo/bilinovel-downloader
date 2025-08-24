@@ -241,8 +241,8 @@ func CreateContentOPF(outputPath string, uuid string, volume *model.Volume, extr
 		})
 		for filename := range chapter.Content.Images {
 			item := model.ManifestItem{
-				ID:    fmt.Sprintf("chapter-%03v-%s", i, filepath.Ext(filename)),
-				Link:  fmt.Sprintf("OEBPS/Images/chapter-%03v/%s", i, filepath.Ext(filename)),
+				ID:    fmt.Sprintf("chapter-%03v-%s", i, filepath.Base(filename)),
+				Link:  fmt.Sprintf("OEBPS/Images/chapter-%03v/%s", i, filepath.Base(filename)),
 				Media: fmt.Sprintf("image/%s", strings.ReplaceAll(strings.TrimPrefix(filepath.Ext(filename), "."), "jpg", "jpeg")),
 			}
 			manifest.Items = append(manifest.Items, item)
