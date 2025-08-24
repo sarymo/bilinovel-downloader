@@ -8,13 +8,13 @@
 1. 下载整本 `https://www.bilinovel.com/novel/2388.html`
 
    ```bash
-   bilinovel-downloader download novel -n 2388
+   bilinovel-downloader download -n 2388
    ```
 
 2. 下载单卷 `https://www.bilinovel.com/novel/2388/vol_84522.html`
 
    ```bash
-   bilinovel-downloader download volume -n 2388 -v 84522
+   bilinovel-downloader download -n 2388 -v 84522
    ```
 
 3. 对自动生成的 epub 格式不满意可以自行修改后使用命令打包

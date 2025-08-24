@@ -1,13 +1,17 @@
 package model
 
+type ChaperContent struct {
+	Html   string
+	Images map[string][]byte
+}
+
 type Chapter struct {
-	Title           string
-	Url             string
-	Content         string
-	ImageOEBPSPaths []string
-	ImageFullPaths  []string
-	TextOEBPSPath   string
-	TextFullPath    string
+	Id       int
+	NovelId  int
+	VolumeId int
+	Title    string
+	Url      string
+	Content  *ChaperContent
 }
 
 type Volume struct {
@@ -15,7 +19,8 @@ type Volume struct {
 	SeriesIdx   int
 	Title       string
 	Url         string
-	Cover       string
+	CoverUrl    string
+	Cover       []byte
 	Description string
 	Authors     []string
 	Chapters    []*Chapter

@@ -1,21 +1,19 @@
 package template
 
-import "bilinovel-downloader/model"
-
-templ ContentXHTML(content *model.Chapter) {
+templ ContentXHTML(title, content string) {
 	@templ.Raw(`<?xml version='1.0' encoding='utf-8'?>`)
 	// @templ.Raw(`<!DOCTYPE html>`)
 	<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="zh-CN">
 		<head>
-			<title>{ content.Title }</title>
+			<title>{ title }</title>
 			@templ.Raw(`<link href="../../style.css" rel="stylesheet" type="text/css"/>`)
 		</head>
 		<body>
 			<div class="chapter">
-				<h1>{ content.Title }</h1>
+				<h1>{ title }</h1>
 				@templ.Raw(`<hr/>`)
 				<div class="content">
-					@templ.Raw(content.Content)
+					@templ.Raw(content)
 				</div>
 			</div>
 		</body>

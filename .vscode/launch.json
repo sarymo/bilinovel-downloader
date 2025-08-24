@@ -2,20 +2,20 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "volume",
+      "name": "download",
       "type": "go",
       "request": "launch",
       "mode": "auto",
       "program": "${workspaceFolder}",
-      "args": ["download", "volume", "-n", "2025", "-v", "72693"]
-    },
-    {
-      "name": "novel",
-      "type": "go",
-      "request": "launch",
-      "mode": "auto",
-      "program": "${workspaceFolder}",
-      "args": ["download", "novel", "-n", "4325"]
+      "args": [
+        "download",
+        "-n",
+        "1410",
+        "-v",
+        "52748",
+        "-t",
+        "text"
+      ]
     }
   ]
 }

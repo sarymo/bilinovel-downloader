@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"bilinovel-downloader/downloader/bilinovel"
+	"bilinovel-downloader/epub"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -28,7 +28,7 @@ func init() {
 }
 
 func runPackage(cmd *cobra.Command, args []string) error {
-	err := bilinovel.CreateEpub(pArgs.DirPath)
+	err := epub.PackEpub(pArgs.DirPath)
 	if err != nil {
 		return fmt.Errorf("failed to create epub: %v", err)
 	}

@@ -2,12 +2,11 @@ package bilinovel
 
 import (
 	"bilinovel-downloader/model"
-	"bilinovel-downloader/template"
 	"bilinovel-downloader/utils"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -17,17 +16,68 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/google/uuid"
+	mapper "github.com/bestnite/font-mapper"
+	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/chromedp"
 )
 
-func GetNovel(novelId int) (*model.Novel, error) {
-	novelUrl := fmt.Sprintf("https://www.bilinovel.com/novel/%v.html", novelId)
-	resp, err := utils.Request().Get(novelUrl)
+//go:embed read.ttf
+var readTTF []byte
+
+//go:embed "MI LANTING.ttf"
+var miLantingTTF []byte
+
+type Bilinovel struct {
+	fontMapper  *mapper.GlyphOutlineMapper
+	textOnly    bool
+	restyClient *utils.RestyClient
+	debug       bool
+}
+
+func New() (*Bilinovel, error) {
+	fontMapper, err := mapper.NewGlyphOutlineMapper(readTTF, miLantingTTF)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get novel info: %v", err)
+		return nil, fmt.Errorf("failed to create font mapper: %v", err)
+	}
+	restyClient := utils.NewRestyClient(10)
+	return &Bilinovel{
+		fontMapper:  fontMapper,
+		textOnly:    false,
+		restyClient: restyClient,
+	}, nil
+}
+
+func (b *Bilinovel) SetTextOnly(textOnly bool) {
+	b.textOnly = textOnly
+}
+
+func (b *Bilinovel) SetDebug(debug bool) {
+	b.debug = debug
+}
+
+func (b *Bilinovel) GetExtraFiles() []model.ExtraFile {
+	return nil
+}
+
+//go:embed style.css
+var styleCSS []byte
+
+func (b *Bilinovel) GetStyleCSS() string {
+	return string(styleCSS)
+}
+
+func (b *Bilinovel) GetNovel(novelId int) (*model.Novel, error) {
+	if b.debug {
+		log.Printf("Getting novel %v\n", novelId)
+	}
+	novelUrl := fmt.Sprintf("https://www.bilinovel.com/novel/%v.html", novelId)
+	resp, err := b.restyClient.R().Get(novelUrl)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get novel info: %w", err)
 	}
 	if resp.StatusCode() != http.StatusOK {
 		return nil, fmt.Errorf("failed to get novel info: %v", resp.Status())
@@ -51,7 +101,7 @@ func GetNovel(novelId int) (*model.Novel, error) {
 		novel.Authors = append(novel.Authors, strings.TrimSpace(s.Text()))
 	})
 
-	volumes, err := getNovelVolumes(novelId)
+	volumes, err := b.getAllVolumes(novelId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get novel volumes: %v", err)
 	}
@@ -60,11 +110,14 @@ func GetNovel(novelId int) (*model.Novel, error) {
 	return novel, nil
 }
 
-func GetVolume(novelId int, volumeId int) (*model.Volume, error) {
+func (b *Bilinovel) GetVolume(novelId int, volumeId int) (*model.Volume, error) {
+	if b.debug {
+		log.Printf("Getting volume %v of novel %v\n", volumeId, novelId)
+	}
 	novelUrl := fmt.Sprintf("https://www.bilinovel.com/novel/%v/catalog", novelId)
-	resp, err := utils.Request().Get(novelUrl)
+	resp, err := b.restyClient.R().Get(novelUrl)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get novel info: %v", err)
+		return nil, fmt.Errorf("failed to get novel info: %w", err)
 	}
 	if resp.StatusCode() != http.StatusOK {
 		return nil, fmt.Errorf("failed to get novel info: %v", resp.Status())
@@ -89,7 +142,7 @@ func GetVolume(novelId int, volumeId int) (*model.Volume, error) {
 	}
 
 	volumeUrl := fmt.Sprintf("https://www.bilinovel.com/novel/%v/vol_%v.html", novelId, volumeId)
-	resp, err = utils.Request().Get(volumeUrl)
+	resp, err = b.restyClient.R().Get(volumeUrl)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get novel info: %v", err)
 	}
@@ -109,9 +162,14 @@ func GetVolume(novelId int, volumeId int) (*model.Volume, error) {
 	volume.SeriesIdx = seriesIdx
 	volume.Title = strings.TrimSpace(doc.Find(".book-title").First().Text())
 	volume.Description = strings.TrimSpace(doc.Find(".book-summary>content").First().Text())
-	volume.Cover = doc.Find(".book-cover").First().AttrOr("src", "")
 	volume.Url = volumeUrl
 	volume.Chapters = make([]*model.Chapter, 0)
+	volume.CoverUrl = doc.Find(".book-cover").First().AttrOr("src", "")
+	cover, err := b.getImg(volume.CoverUrl)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cover: %v", err)
+	}
+	volume.Cover = cover
 
 	doc.Find(".authorname>a").Each(func(i int, s *goquery.Selection) {
 		volume.Authors = append(volume.Authors, strings.TrimSpace(s.Text()))
@@ -119,7 +177,6 @@ func GetVolume(novelId int, volumeId int) (*model.Volume, error) {
 	doc.Find(".illname>a").Each(func(i int, s *goquery.Selection) {
 		volume.Authors = append(volume.Authors, strings.TrimSpace(s.Text()))
 	})
-
 	doc.Find(".chapter-li.jsChapter").Each(func(i int, s *goquery.Selection) {
 		volume.Chapters = append(volume.Chapters, &model.Chapter{
 			Title: s.Find("a").Text(),
@@ -127,12 +184,51 @@ func GetVolume(novelId int, volumeId int) (*model.Volume, error) {
 		})
 	})
 
+	idRegexp := regexp.MustCompile(`/novel/(\d+)/(\d+).html`)
+	wg := sync.WaitGroup{}
+	errChan := make(chan error, len(volume.Chapters))
+	for i := range volume.Chapters {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			matches := idRegexp.FindStringSubmatch(volume.Chapters[i].Url)
+			if len(matches) > 0 {
+				chapterId, err := strconv.Atoi(matches[2])
+				if err != nil {
+					errChan <- fmt.Errorf("failed to convert chapter id: %v", err)
+					return
+				}
+				chapter, err := b.GetChapter(novelId, volumeId, chapterId)
+				if err != nil {
+					errChan <- fmt.Errorf("failed to get chapter: %v", err)
+					return
+				}
+				chapter.Id = chapterId
+				volume.Chapters[i] = chapter
+			} else {
+				errChan <- fmt.Errorf("failed to get chapter id: %v", volume.Chapters[i].Url)
+				return
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errChan)
+
+	// 检查是否有错误
+	for err := range errChan {
+		if err != nil {
+			return nil, err
+		}
+	}
 	return volume, nil
 }
 
-func getNovelVolumes(novelId int) ([]*model.Volume, error) {
+func (b *Bilinovel) getAllVolumes(novelId int) ([]*model.Volume, error) {
+	if b.debug {
+		log.Printf("Getting all volumes of novel %v\n", novelId)
+	}
 	catelogUrl := fmt.Sprintf("https://www.bilinovel.com/novel/%v/catalog", novelId)
-	resp, err := utils.Request().Get(catelogUrl)
+	resp, err := b.restyClient.R().Get(catelogUrl)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get catelog: %v", err)
 	}
@@ -162,7 +258,7 @@ func getNovelVolumes(novelId int) ([]*model.Volume, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert volume id: %v", err)
 		}
-		volume, err := GetVolume(novelId, volumeId)
+		volume, err := b.GetVolume(novelId, volumeId)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get volume info: %v", err)
 		}
@@ -173,207 +269,36 @@ func getNovelVolumes(novelId int) ([]*model.Volume, error) {
 	return volumes, nil
 }
 
-func DownloadNovel(novelId int, outputPath string) error {
-	log.Printf("Downloading Novel: %v", novelId)
-
-	novel, err := GetNovel(novelId)
-	if err != nil {
-		return fmt.Errorf("failed to get novel info: %v", err)
+func (b *Bilinovel) GetChapter(novelId int, volumeId int, chapterId int) (*model.Chapter, error) {
+	if b.debug {
+		log.Printf("Getting chapter %v of novel %v\n", chapterId, novelId)
 	}
-
-	outputPath = filepath.Join(outputPath, utils.CleanDirName(novel.Title))
-	err = os.MkdirAll(outputPath, 0755)
-	if err != nil {
-		return fmt.Errorf("failed to create output directory: %v", err)
-	}
-
-	for _, volume := range novel.Volumes {
-		err := downloadVolume(volume, outputPath)
-		if err != nil {
-			return fmt.Errorf("failed to download volume: %v", err)
-		}
-	}
-
-	return nil
-}
-
-func DownloadVolume(novelId, volumeId int, outputPath string) error {
-	volume, err := GetVolume(novelId, volumeId)
-	if err != nil {
-		return fmt.Errorf("failed to get volume info: %v", err)
-	}
-	err = downloadVolume(volume, outputPath)
-	if err != nil {
-		return fmt.Errorf("failed to download volume: %v", err)
-	}
-	return nil
-}
-
-func downloadVolume(volume *model.Volume, outputPath string) error {
-	log.Printf("Downloading Volume: %s", volume.Title)
-	outputPath = filepath.Join(outputPath, utils.CleanDirName(volume.Title))
-	err := os.MkdirAll(outputPath, 0755)
-	if err != nil {
-		return fmt.Errorf("failed to create output directory: %v", err)
-	}
-
-	_, err = os.Stat(filepath.Join(outputPath, "volume.json"))
-	if os.IsNotExist(err) {
-		for idx, chapter := range volume.Chapters {
-			err := DownloadChapter(idx, chapter, outputPath)
-			if err != nil {
-				return fmt.Errorf("failed to download chapter: %v", err)
-			}
-		}
-	} else {
-		jsonBytes, err := os.ReadFile(filepath.Join(outputPath, "volume.json"))
-		if err != nil {
-			return fmt.Errorf("failed to read volume: %v", err)
-		}
-		err = json.Unmarshal(jsonBytes, volume)
-		if err != nil {
-			return fmt.Errorf("failed to unmarshal volume: %v", err)
-		}
-		for idx, chapter := range volume.Chapters {
-			file, err := os.Create(filepath.Join(outputPath, fmt.Sprintf("OEBPS/Text/chapter-%03v.xhtml", idx+1)))
-			if err != nil {
-				return fmt.Errorf("failed to create chapter file: %v", err)
-			}
-			err = template.ContentXHTML(chapter).Render(context.Background(), file)
-			if err != nil {
-				return fmt.Errorf("failed to render text file: %v", err)
-			}
-		}
-	}
-
-	for i := range volume.Chapters {
-		volume.Chapters[i].ImageFullPaths = utils.Unique(volume.Chapters[i].ImageFullPaths)
-		volume.Chapters[i].ImageOEBPSPaths = utils.Unique(volume.Chapters[i].ImageOEBPSPaths)
-	}
-
-	jsonBytes, err := json.Marshal(volume)
-	if err != nil {
-		return fmt.Errorf("failed to marshal volume: %v", err)
-	}
-	err = os.WriteFile(filepath.Join(outputPath, "volume.json"), jsonBytes, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to write volume: %v", err)
-	}
-
-	coverPath := filepath.Join(outputPath, "cover.jpeg")
-	err = os.MkdirAll(path.Dir(coverPath), 0755)
-	if err != nil {
-		return fmt.Errorf("failed to create cover directory: %v", err)
-	}
-	err = DownloadImg(volume.Cover, coverPath)
-	if err != nil {
-		return fmt.Errorf("failed to download cover: %v", err)
-	}
-
-	coverXHTMLPath := filepath.Join(outputPath, "OEBPS/Text/cover.xhtml")
-	err = os.MkdirAll(path.Dir(coverXHTMLPath), 0755)
-	if err != nil {
-		return fmt.Errorf("failed to create cover directory: %v", err)
-	}
-	file, err := os.Create(coverXHTMLPath)
-	if err != nil {
-		return fmt.Errorf("failed to create cover file: %v", err)
-	}
-	err = template.CoverXHTML(fmt.Sprintf(`../../cover%s`, strings.ReplaceAll(path.Ext(volume.Cover), "jpg", "jpeg"))).Render(context.Background(), file)
-	if err != nil {
-		return fmt.Errorf("failed to render cover: %v", err)
-	}
-
-	err = DownloadFont(filepath.Join(outputPath, "OEBPS/Fonts"))
-	if err != nil {
-		return fmt.Errorf("failed to download font: %v", err)
-	}
-
-	contentsXHTMLPath := filepath.Join(outputPath, "OEBPS/Text/contents.xhtml")
-	err = os.MkdirAll(path.Dir(contentsXHTMLPath), 0755)
-	if err != nil {
-		return fmt.Errorf("failed to create contents directory: %v", err)
-	}
-	file, err = os.Create(contentsXHTMLPath)
-	if err != nil {
-		return fmt.Errorf("failed to create contents file: %v", err)
-	}
-	contents := strings.Builder{}
-	contents.WriteString(`<nav epub:type="toc" id="toc">`)
-	contents.WriteString(`<ol>`)
-	for _, chapter := range volume.Chapters {
-		contents.WriteString(fmt.Sprintf(`<li><a href="%s">%s</a></li>`, strings.TrimPrefix(chapter.TextOEBPSPath, "Text/"), chapter.Title))
-	}
-	contents.WriteString(`</ol>`)
-	contents.WriteString(`</nav>`)
-	err = template.ContentXHTML(&model.Chapter{
-		Title:   "目录",
-		Content: contents.String(),
-	}).Render(context.Background(), file)
-	if err != nil {
-		return fmt.Errorf("failed to render contents: %v", err)
-	}
-
-	err = CreateContainerXML(outputPath)
-	if err != nil {
-		return fmt.Errorf("failed to create container xml: %v", err)
-	}
-
-	u, err := uuid.NewV7()
-	if err != nil {
-		return fmt.Errorf("failed to generate uuid: %v", err)
-	}
-
-	err = CreateContentOPF(outputPath, u.String(), volume)
-	if err != nil {
-		return fmt.Errorf("failed to create content opf: %v", err)
-	}
-
-	err = CreateEpub(outputPath)
-	if err != nil {
-		return fmt.Errorf("failed to create epub: %v", err)
-	}
-
-	return nil
-}
-
-func DownloadChapter(chapterIdx int, chapter *model.Chapter, outputPath string) error {
-	chapter.TextFullPath = filepath.Join(outputPath, fmt.Sprintf("OEBPS/Text/chapter-%03v.xhtml", chapterIdx+1))
-	chapter.TextOEBPSPath = fmt.Sprintf("Text/chapter-%03v.xhtml", chapterIdx+1)
-	err := os.MkdirAll(path.Dir(chapter.TextFullPath), 0755)
-	if err != nil {
-		return fmt.Errorf("failed to create text directory: %v", err)
-	}
-
 	page := 1
+	chapter := &model.Chapter{
+		Id:       chapterId,
+		NovelId:  novelId,
+		VolumeId: volumeId,
+		Url:      fmt.Sprintf("https://www.bilinovel.com/novel/%v/%v.html", novelId, chapterId),
+	}
 	for {
-		hasNext, err := downloadChapterByPage(page, chapterIdx, chapter, outputPath)
+		hasNext, err := b.getChapterByPage(chapter, page)
 		if err != nil {
-			return fmt.Errorf("failed to download chapter: %v", err)
+			return nil, fmt.Errorf("failed to download chapter: %w", err)
 		}
 		if !hasNext {
 			break
 		}
 		page++
-		time.Sleep(time.Second)
 	}
-
-	file, err := os.Create(chapter.TextFullPath)
-	if err != nil {
-		return fmt.Errorf("failed to create text file: %v", err)
-	}
-
-	err = template.ContentXHTML(chapter).Render(context.Background(), file)
-	if err != nil {
-		return fmt.Errorf("failed to render text file: %v", err)
-	}
-
-	return nil
+	return chapter, nil
 }
 
-func downloadChapterByPage(page, chapterIdx int, chapter *model.Chapter, outputPath string) (bool, error) {
+func (b *Bilinovel) getChapterByPage(chapter *model.Chapter, page int) (bool, error) {
+	if b.debug {
+		log.Printf("Getting chapter %v by page %v\n", chapter.Id, page)
+	}
+
 	Url := strings.TrimSuffix(chapter.Url, ".html") + fmt.Sprintf("_%v.html", page)
-	log.Printf("Downloading Chapter: %s", Url)
 
 	hasNext := false
 	headers := map[string]string{
@@ -381,251 +306,185 @@ func downloadChapterByPage(page, chapterIdx int, chapter *model.Chapter, outputP
 		"Accept-Language": "zh-CN,zh;q=0.9,en-GB;q=0.8,en;q=0.7,zh-TW;q=0.6",
 		"Cookie":          "night=1;",
 	}
-	resp, err := utils.Request().SetHeaders(headers).Get(Url)
+	resp, err := b.restyClient.R().SetHeaders(headers).Get(Url)
 	if err != nil {
-		return hasNext, err
+		return false, fmt.Errorf("failed to get chapter: %w", err)
 	}
 	if resp.StatusCode() != http.StatusOK {
-		return hasNext, fmt.Errorf("failed to get chapter: %v", resp.Status())
+		return false, fmt.Errorf("failed to get chapter: %v", resp.Status())
 	}
 
 	if strings.Contains(resp.String(), `<a onclick="window.location.href = ReadParams.url_next;">下一頁</a>`) {
 		hasNext = true
 	}
 
-	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(resp.Body()))
+	html := resp.Body()
+	// 解决乱序问题
+	resortedHtml, err := ProcessContentWithChromedp(string(html))
 	if err != nil {
-		fmt.Println(err)
-		return hasNext, err
+		return false, fmt.Errorf("failed to process html: %w", err)
+	}
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(resortedHtml))
+	if err != nil {
+		return false, fmt.Errorf("failed to parse html: %w", err)
 	}
 
-	imgSavePath := fmt.Sprintf("OEBPS/Images/chapter-%03v", chapterIdx+1)
-
+	if page == 1 {
+		chapter.Title = doc.Find("#atitle").Text()
+	}
 	content := doc.Find("#acontent").First()
 	content.Find(".cgo").Remove()
 	content.Find("center").Remove()
 	content.Find(".google-auto-placed").Remove()
-	if strings.Contains(resp.String(), `font-family: "read"`) {
-		content.Find("p").Last().AddClass("read-font")
-	}
 
-	content.Find("img").Each(func(i int, s *goquery.Selection) {
+	if strings.Contains(resp.String(), `font-family: "read"`) {
+		html, err := content.Find("p").Last().Html()
 		if err != nil {
-			return
+			return false, fmt.Errorf("failed to get html: %v", err)
 		}
-		imgUrl := s.AttrOr("data-src", "")
-		if imgUrl == "" {
-			imgUrl = s.AttrOr("src", "")
-			if imgUrl == "" {
-				return
+		builder := strings.Builder{}
+		for _, r := range html {
+			_, newRune, ok := b.fontMapper.MappingRune(r)
+			if ok {
+				builder.WriteRune(newRune)
 			}
 		}
-
-		fileName := filepath.Join(imgSavePath, fmt.Sprintf("%03v%s", len(chapter.ImageFullPaths)+1, path.Ext(imgUrl)))
-		err = DownloadImg(imgUrl, filepath.Join(outputPath, fileName))
-		if err == nil {
-			s.SetAttr("src", "../"+strings.TrimPrefix(fileName, "OEBPS/"))
-			s.RemoveAttr("class")
-			s.RemoveAttr("data-src")
-			chapter.ImageFullPaths = append(chapter.ImageFullPaths, filepath.Join(outputPath, fileName))
-			chapter.ImageOEBPSPaths = append(chapter.ImageOEBPSPaths, strings.TrimPrefix(fileName, "OEBPS/"))
-		}
-	})
-	if err != nil {
-		return false, fmt.Errorf("failed to download img: %v", err)
+		content.Find("p").Last().SetHtml(builder.String())
 	}
 
-	html, err := content.Html()
+	if b.textOnly {
+		content.Find("img").Remove()
+	} else {
+		content.Find("img").Each(func(i int, s *goquery.Selection) {
+			imgUrl := s.AttrOr("data-src", "")
+			if imgUrl == "" {
+				imgUrl = s.AttrOr("src", "")
+				if imgUrl == "" {
+					return
+				}
+			}
+
+			imageHash := sha256.Sum256([]byte(imgUrl))
+			imageFilename := fmt.Sprintf("%x%s", string(imageHash[:]), path.Ext(imgUrl))
+			s.SetAttr("src", imageFilename)
+			s.SetAttr("alt", imgUrl)
+			img, err := b.getImg(imgUrl)
+			if err != nil {
+				return
+			}
+			if chapter.Content == nil {
+				chapter.Content = &model.ChaperContent{}
+			}
+			if chapter.Content.Images == nil {
+				chapter.Content.Images = make(map[string][]byte)
+			}
+			chapter.Content.Images[imageFilename] = img
+		})
+	}
+
+	htmlStr, err := content.Html()
 	if err != nil {
 		return false, fmt.Errorf("failed to get html: %v", err)
 	}
 
-	chapter.Content += strings.TrimSpace(html)
+	if chapter.Content == nil {
+		chapter.Content = &model.ChaperContent{}
+	}
+	chapter.Content.Html += strings.TrimSpace(htmlStr)
 
 	return hasNext, nil
 }
 
-func DownloadImg(url string, fileName string) error {
-	_, err := os.Stat(fileName)
-	if !os.IsNotExist(err) {
-		return nil
+func (b *Bilinovel) getImg(url string) ([]byte, error) {
+	if b.debug {
+		log.Printf("Getting img %v\n", url)
 	}
-
-	log.Printf("Downloading Image: %s", url)
-	dir := filepath.Dir(fileName)
-	err = os.MkdirAll(dir, 0755)
+	resp, err := b.restyClient.R().SetHeader("Referer", "https://www.bilinovel.com").Get(url)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	resp, err := utils.Request().SetHeader("Referer", "https://www.bilinovel.com").Get(url)
-	if err != nil {
-		return err
-	}
-
-	err = os.WriteFile(fileName, resp.Body(), 0644)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return resp.Body(), nil
 }
 
-func CreateContainerXML(dirPath string) error {
-	containerPath := filepath.Join(dirPath, "META-INF/container.xml")
-	err := os.MkdirAll(path.Dir(containerPath), 0755)
+func ProcessContentWithChromedp(htmlContent string) (string, error) {
+	tempFile, err := os.CreateTemp("", "bilinovel-temp-*.html")
 	if err != nil {
-		return fmt.Errorf("failed to create container directory: %v", err)
+		return "", fmt.Errorf("failed to create temp file: %w", err)
 	}
-	file, err := os.Create(containerPath)
+	defer os.Remove(tempFile.Name())
+	_, err = tempFile.WriteString(htmlContent)
 	if err != nil {
-		return fmt.Errorf("failed to create container file: %v", err)
+		return "", fmt.Errorf("failed to write temp file: %w", err)
 	}
-	err = template.ContainerXML().Render(context.Background(), file)
-	if err != nil {
-		return fmt.Errorf("failed to render container: %v", err)
-	}
-	return nil
-}
+	tempFile.Close()
+	tempFilePath := tempFile.Name()
 
-func CreateContentOPF(dirPath string, uuid string, volume *model.Volume) error {
-	creators := make([]model.DCCreator, 0)
-	for _, author := range volume.Authors {
-		creators = append(creators, model.DCCreator{
-			Value: author,
-		})
-	}
-	dc := &model.DublinCoreMetadata{
-		Titles: []model.DCTitle{
-			{
-				Value: volume.Title,
-			},
-		},
-		Identifiers: []model.DCIdentifier{
-			{
-				Value: fmt.Sprintf("urn:uuid:%s", uuid),
-				ID:    "book-id",
-				// Scheme: "UUID",
-			},
-		},
-		Languages: []model.DCLanguage{
-			{
-				Value: "zh-CN",
-			},
-		},
-		Descriptions: []model.DCDescription{
-			{
-				Value: volume.Description,
-			},
-		},
-		Creators: creators,
-		Metas: []model.DublinCoreMeta{
-			{
-				Name:    "cover",
-				Content: "cover",
-			},
-			{
-				Property: "dcterms:modified",
-				Value:    time.Now().UTC().Format("2006-01-02T15:04:05Z"),
-			},
-			{
-				Name:    "calibre:series",
-				Content: volume.NovelTitle,
-			},
-			{
-				Name:    "calibre:series_index",
-				Content: strconv.Itoa(volume.SeriesIdx),
-			},
-		},
-	}
-	manifest := &model.Manifest{
-		Items: make([]model.ManifestItem, 0),
-	}
-	manifest.Items = append(manifest.Items, model.ManifestItem{
-		ID:    "cover.xhtml",
-		Link:  "OEBPS/Text/cover.xhtml",
-		Media: "application/xhtml+xml",
-	})
-	manifest.Items = append(manifest.Items, model.ManifestItem{
-		ID:         "contents.xhtml",
-		Link:       "OEBPS/Text/contents.xhtml",
-		Media:      "application/xhtml+xml",
-		Properties: "nav",
-	})
-	manifest.Items = append(manifest.Items, model.ManifestItem{
-		ID:         "cover",
-		Link:       fmt.Sprintf("cover%s", strings.ReplaceAll(path.Ext(volume.Cover), "jpg", "jpeg")),
-		Media:      fmt.Sprintf("image/%s", strings.ReplaceAll(strings.TrimPrefix(path.Ext(volume.Cover), "."), "jpg", "jpeg")),
-		Properties: "cover-image",
-	})
-	manifest.Items = append(manifest.Items, model.ManifestItem{
-		ID:    "read.ttf",
-		Link:  "OEBPS/Fonts/read.ttf",
-		Media: "application/vnd.ms-opentype",
-	})
-	for _, chapter := range volume.Chapters {
-		manifest.Items = append(manifest.Items, model.ManifestItem{
-			ID:    path.Base(chapter.TextOEBPSPath),
-			Link:  "OEBPS/" + chapter.TextOEBPSPath,
-			Media: "application/xhtml+xml",
-		})
-		for _, image := range chapter.ImageOEBPSPaths {
-			item := model.ManifestItem{
-				ID:   strings.Join(strings.Split(strings.ToLower(image), string(filepath.Separator)), "-"),
-				Link: "OEBPS/" + image,
-			}
-			item.Media = fmt.Sprintf("image/%s", strings.ReplaceAll(strings.TrimPrefix(path.Ext(volume.Cover), "."), "jpg", "jpeg"))
-			manifest.Items = append(manifest.Items, item)
-		}
-	}
-	manifest.Items = append(manifest.Items, model.ManifestItem{
-		ID:    "style",
-		Link:  "style.css",
-		Media: "text/css",
-	})
+	// 创建chromedp选项
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("headless", true),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("disable-extensions", true),
+		chromedp.Flag("no-sandbox", true),
+	)
 
-	spine := &model.Spine{
-		Items: make([]model.SpineItem, 0),
-	}
-	for _, item := range manifest.Items {
-		if filepath.Ext(item.Link) == ".xhtml" {
-			spine.Items = append(spine.Items, model.SpineItem{
-				IDref: item.ID,
+	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
+	defer cancel()
+
+	ctx, cancel := chromedp.NewContext(allocCtx)
+	defer cancel()
+
+	// 设置超时
+	ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	var processedHTML string
+
+	// 3. 执行chromedp任务并获取页面代码
+	err = chromedp.Run(ctx,
+		network.Enable(),
+
+		// 等待JavaScript执行完成
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			// 监听网络事件
+			networkEventChan := make(chan bool, 1)
+			requestID := ""
+			chromedp.ListenTarget(ctx, func(ev interface{}) {
+				switch ev := ev.(type) {
+				case *network.EventRequestWillBeSent:
+					if strings.Contains(ev.Request.URL, "chapterlog.js") {
+						requestID = ev.RequestID.String()
+					}
+				case *network.EventLoadingFinished:
+					if ev.RequestID.String() == requestID {
+						networkEventChan <- true
+					}
+				}
 			})
-		}
-	}
-	contentOPFPath := filepath.Join(dirPath, "content.opf")
-	err := os.MkdirAll(path.Dir(contentOPFPath), 0755)
-	if err != nil {
-		return fmt.Errorf("failed to create content directory: %v", err)
-	}
-	file, err := os.Create(contentOPFPath)
-	if err != nil {
-		return fmt.Errorf("failed to create content file: %v", err)
-	}
-	err = template.ContentOPF("book-id", dc, manifest, spine, nil).Render(context.Background(), file)
-	if err != nil {
-		return fmt.Errorf("failed to render content: %v", err)
-	}
-	return nil
-}
 
-//go:embed read.ttf
-var readTTF []byte
+			go func() {
+				select {
+				case <-networkEventChan:
+				case <-time.After(30 * time.Second):
+					log.Println("Timeout waiting for external script")
+				case <-ctx.Done():
+					log.Println("Context cancelled")
+				}
+			}()
+			return nil
+		}),
+		// 导航到本地文件
+		chromedp.Navigate("file://"+filepath.ToSlash(tempFilePath)),
+		// 等待页面加载完成
+		chromedp.WaitVisible(`#acontent`, chromedp.ByID),
+		// 获取页面的HTML代码
+		chromedp.OuterHTML("html", &processedHTML, chromedp.ByQuery),
+	)
 
-func DownloadFont(outputPath string) error {
-	log.Printf("Writing Font: %s", outputPath)
-
-	fontPath := filepath.Join(outputPath, "read.ttf")
-	err := os.MkdirAll(path.Dir(fontPath), 0755)
 	if err != nil {
-		return fmt.Errorf("failed to create font directory: %v", err)
+		return "", fmt.Errorf("chromedp execution failed: %w", err)
 	}
 
-	err = os.WriteFile(fontPath, readTTF, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to write font: %v", err)
-	}
-
-	return nil
+	return processedHTML, nil
 }
