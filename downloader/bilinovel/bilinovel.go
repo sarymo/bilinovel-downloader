@@ -460,15 +460,16 @@ func (b *Bilinovel) processContentWithChromedp(htmlContent string) (string, erro
 
 	var processedHTML string
 
+	// 设置网络事件监听
+	networkEventChan := make(chan bool, 1)
+	var requestID string
+
 	// 执行处理任务
 	err = chromedp.Run(ctx,
 		network.Enable(),
 
-		// 等待JavaScript执行完成
+		// 设置网络事件监听器
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			// 监听网络事件
-			networkEventChan := make(chan bool, 1)
-			requestID := ""
 			chromedp.ListenTarget(ctx, func(ev interface{}) {
 				switch ev := ev.(type) {
 				case *network.EventRequestWillBeSent:
@@ -476,27 +477,74 @@ func (b *Bilinovel) processContentWithChromedp(htmlContent string) (string, erro
 						requestID = ev.RequestID.String()
 					}
 				case *network.EventLoadingFinished:
-					if ev.RequestID.String() == requestID {
-						networkEventChan <- true
+					if ev.RequestID.String() == requestID && requestID != "" {
+						select {
+						case networkEventChan <- true:
+						default:
+						}
 					}
 				}
 			})
-
-			go func() {
-				select {
-				case <-networkEventChan:
-				case <-time.After(30 * time.Second):
-					log.Println("Timeout waiting for external script")
-				case <-ctx.Done():
-					log.Println("Context cancelled")
-				}
-			}()
 			return nil
 		}),
+
 		// 导航到本地文件
 		chromedp.Navigate("file://"+filepath.ToSlash(tempFilePath)),
+
 		// 等待页面加载完成
 		chromedp.WaitVisible(`#acontent`, chromedp.ByID),
+
+		// 等待外部脚本加载或超时
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			select {
+			case <-networkEventChan:
+				log.Println("External script loaded successfully")
+			case <-time.After(10 * time.Second):
+				log.Println("Timeout waiting for external script, continuing anyway")
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			return nil
+		}),
+
+		// 遍历所有 #acontent 的子元素, 通过 window.getComputedStyle().display 检测是否是 none, 如果是 none 则从页面删除这个元素
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			// 执行JavaScript来移除display:none的元素
+			var result string
+			err := chromedp.Evaluate(`
+				(function() {
+					const acontent = document.getElementById('acontent');
+					if (!acontent) {
+						return 'acontent element not found';
+					}
+					
+					let removedCount = 0;
+					const elements = acontent.querySelectorAll('*');
+					
+					// 从后往前遍历，避免删除元素时影响索引
+					for (let i = elements.length - 1; i >= 0; i--) {
+						const element = elements[i];
+						const computedStyle = window.getComputedStyle(element);
+						
+						if (computedStyle.display === 'none') {
+							element.remove();
+							removedCount++;
+						}
+					}
+					
+					return 'Removed ' + removedCount + ' hidden elements';
+				})()
+			`, &result).Do(ctx)
+
+			if err != nil {
+				log.Printf("Failed to remove hidden elements: %v", err)
+				return err
+			}
+
+			log.Printf("Hidden elements removal result: %s", result)
+			return nil
+		}),
+
 		// 获取页面的HTML代码
 		chromedp.OuterHTML("html", &processedHTML, chromedp.ByQuery),
 	)

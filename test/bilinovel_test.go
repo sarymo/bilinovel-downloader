@@ -43,10 +43,11 @@ func TestBilinovel_GetVolume(t *testing.T) {
 
 func TestBilinovel_GetChapter(t *testing.T) {
 	bilinovel, err := bilinovel.New()
+	bilinovel.SetTextOnly(true)
 	if err != nil {
 		t.Fatalf("failed to create bilinovel: %v", err)
 	}
-	chapter, err := bilinovel.GetChapter(1410, 52748, 52752)
+	chapter, err := bilinovel.GetChapter(3095, 154930, 154933)
 	if err != nil {
 		t.Fatalf("failed to get chapter: %v", err)
 	}
