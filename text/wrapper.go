@@ -46,7 +46,7 @@ func PackVolumeToText(volume *model.Volume, outputPath string) error {
 		}
 		doc.Find("img").Remove()
 		text := doc.Text()
-		_, err = chapterFile.WriteString(text)
+		_, err = chapterFile.WriteString(strings.TrimSpace(text))
 		if err != nil {
 			return fmt.Errorf("failed to write chapter file: %v", err)
 		}
