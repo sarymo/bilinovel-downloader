@@ -16,7 +16,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -35,7 +34,12 @@ type Bilinovel struct {
 	fontMapper  *mapper.GlyphOutlineMapper
 	textOnly    bool
 	restyClient *utils.RestyClient
-	debug       bool
+
+	// 浏览器实例复用
+	allocCtx      context.Context
+	allocCancel   context.CancelFunc
+	browserCtx    context.Context
+	browserCancel context.CancelFunc
 }
 
 func New() (*Bilinovel, error) {
@@ -43,23 +47,73 @@ func New() (*Bilinovel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create font mapper: %v", err)
 	}
-	restyClient := utils.NewRestyClient(10)
-	return &Bilinovel{
+	restyClient := utils.NewRestyClient(50)
+
+	b := &Bilinovel{
 		fontMapper:  fontMapper,
 		textOnly:    false,
 		restyClient: restyClient,
-	}, nil
+	}
+
+	// 初始化浏览器实例
+	err = b.initBrowser()
+	if err != nil {
+		return nil, fmt.Errorf("failed to init browser: %v", err)
+	}
+
+	return b, nil
 }
 
 func (b *Bilinovel) SetTextOnly(textOnly bool) {
 	b.textOnly = textOnly
 }
 
-func (b *Bilinovel) SetDebug(debug bool) {
-	b.debug = debug
+func (b *Bilinovel) GetExtraFiles() []model.ExtraFile {
+	return nil
 }
 
-func (b *Bilinovel) GetExtraFiles() []model.ExtraFile {
+// initBrowser 初始化浏览器实例
+func (b *Bilinovel) initBrowser() error {
+	// 创建chromedp选项
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("headless", true),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("disable-extensions", true),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-background-timer-throttling", true),
+		chromedp.Flag("disable-backgrounding-occluded-windows", true),
+		chromedp.Flag("disable-renderer-backgrounding", true),
+	)
+
+	var err error
+	b.allocCtx, b.allocCancel = chromedp.NewExecAllocator(context.Background(), opts...)
+	b.browserCtx, b.browserCancel = chromedp.NewContext(b.allocCtx)
+
+	// 预热浏览器 - 导航到空白页
+	err = chromedp.Run(b.browserCtx, chromedp.Navigate("about:blank"))
+	if err != nil {
+		b.closeBrowser()
+		return fmt.Errorf("failed to initialize browser: %v", err)
+	}
+
+	log.Println("Browser initialized successfully")
+	return nil
+}
+
+// closeBrowser 关闭浏览器实例
+func (b *Bilinovel) closeBrowser() {
+	if b.browserCancel != nil {
+		b.browserCancel()
+	}
+	if b.allocCancel != nil {
+		b.allocCancel()
+	}
+}
+
+// Close 关闭下载器时清理资源
+func (b *Bilinovel) Close() error {
+	b.closeBrowser()
 	return nil
 }
 
@@ -70,10 +124,9 @@ func (b *Bilinovel) GetStyleCSS() string {
 	return string(styleCSS)
 }
 
-func (b *Bilinovel) GetNovel(novelId int) (*model.Novel, error) {
-	if b.debug {
-		log.Printf("Getting novel %v\n", novelId)
-	}
+func (b *Bilinovel) GetNovel(novelId int, skipChapter bool) (*model.Novel, error) {
+	log.Printf("Getting novel %v\n", novelId)
+
 	novelUrl := fmt.Sprintf("https://www.bilinovel.com/novel/%v.html", novelId)
 	resp, err := b.restyClient.R().Get(novelUrl)
 	if err != nil {
@@ -101,7 +154,7 @@ func (b *Bilinovel) GetNovel(novelId int) (*model.Novel, error) {
 		novel.Authors = append(novel.Authors, strings.TrimSpace(s.Text()))
 	})
 
-	volumes, err := b.getAllVolumes(novelId)
+	volumes, err := b.getAllVolumes(novelId, skipChapter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get novel volumes: %v", err)
 	}
@@ -110,10 +163,9 @@ func (b *Bilinovel) GetNovel(novelId int) (*model.Novel, error) {
 	return novel, nil
 }
 
-func (b *Bilinovel) GetVolume(novelId int, volumeId int) (*model.Volume, error) {
-	if b.debug {
-		log.Printf("Getting volume %v of novel %v\n", volumeId, novelId)
-	}
+func (b *Bilinovel) GetVolume(novelId int, volumeId int, skipChapter bool) (*model.Volume, error) {
+	log.Printf("Getting volume %v of novel %v\n", volumeId, novelId)
+
 	novelUrl := fmt.Sprintf("https://www.bilinovel.com/novel/%v/catalog", novelId)
 	resp, err := b.restyClient.R().Get(novelUrl)
 	if err != nil {
@@ -185,48 +237,33 @@ func (b *Bilinovel) GetVolume(novelId int, volumeId int) (*model.Volume, error) 
 	})
 
 	idRegexp := regexp.MustCompile(`/novel/(\d+)/(\d+).html`)
-	wg := sync.WaitGroup{}
-	errChan := make(chan error, len(volume.Chapters))
-	for i := range volume.Chapters {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+
+	if !skipChapter {
+		for i := range volume.Chapters {
 			matches := idRegexp.FindStringSubmatch(volume.Chapters[i].Url)
 			if len(matches) > 0 {
 				chapterId, err := strconv.Atoi(matches[2])
 				if err != nil {
-					errChan <- fmt.Errorf("failed to convert chapter id: %v", err)
-					return
+					return nil, fmt.Errorf("failed to convert chapter id: %v", err)
 				}
 				chapter, err := b.GetChapter(novelId, volumeId, chapterId)
 				if err != nil {
-					errChan <- fmt.Errorf("failed to get chapter: %v", err)
-					return
+					return nil, fmt.Errorf("failed to get chapter: %v", err)
 				}
 				chapter.Id = chapterId
 				volume.Chapters[i] = chapter
 			} else {
-				errChan <- fmt.Errorf("failed to get chapter id: %v", volume.Chapters[i].Url)
-				return
+				return nil, fmt.Errorf("failed to get chapter id: %v", volume.Chapters[i].Url)
 			}
-		}(i)
-	}
-	wg.Wait()
-	close(errChan)
-
-	// 检查是否有错误
-	for err := range errChan {
-		if err != nil {
-			return nil, err
 		}
 	}
+
 	return volume, nil
 }
 
-func (b *Bilinovel) getAllVolumes(novelId int) ([]*model.Volume, error) {
-	if b.debug {
-		log.Printf("Getting all volumes of novel %v\n", novelId)
-	}
+func (b *Bilinovel) getAllVolumes(novelId int, skipChapter bool) ([]*model.Volume, error) {
+	log.Printf("Getting all volumes of novel %v\n", novelId)
+
 	catelogUrl := fmt.Sprintf("https://www.bilinovel.com/novel/%v/catalog", novelId)
 	resp, err := b.restyClient.R().Get(catelogUrl)
 	if err != nil {
@@ -258,7 +295,7 @@ func (b *Bilinovel) getAllVolumes(novelId int) ([]*model.Volume, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert volume id: %v", err)
 		}
-		volume, err := b.GetVolume(novelId, volumeId)
+		volume, err := b.GetVolume(novelId, volumeId, skipChapter)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get volume info: %v", err)
 		}
@@ -270,9 +307,8 @@ func (b *Bilinovel) getAllVolumes(novelId int) ([]*model.Volume, error) {
 }
 
 func (b *Bilinovel) GetChapter(novelId int, volumeId int, chapterId int) (*model.Chapter, error) {
-	if b.debug {
-		log.Printf("Getting chapter %v of novel %v\n", chapterId, novelId)
-	}
+	log.Printf("Getting chapter %v of novel %v\n", chapterId, novelId)
+
 	page := 1
 	chapter := &model.Chapter{
 		Id:       chapterId,
@@ -294,9 +330,7 @@ func (b *Bilinovel) GetChapter(novelId int, volumeId int, chapterId int) (*model
 }
 
 func (b *Bilinovel) getChapterByPage(chapter *model.Chapter, page int) (bool, error) {
-	if b.debug {
-		log.Printf("Getting chapter %v by page %v\n", chapter.Id, page)
-	}
+	log.Printf("Getting chapter %v by page %v\n", chapter.Id, page)
 
 	Url := strings.TrimSuffix(chapter.Url, ".html") + fmt.Sprintf("_%v.html", page)
 
@@ -320,7 +354,7 @@ func (b *Bilinovel) getChapterByPage(chapter *model.Chapter, page int) (bool, er
 
 	html := resp.Body()
 	// 解决乱序问题
-	resortedHtml, err := ProcessContentWithChromedp(string(html))
+	resortedHtml, err := b.processContentWithChromedp(string(html))
 	if err != nil {
 		return false, fmt.Errorf("failed to process html: %w", err)
 	}
@@ -396,9 +430,7 @@ func (b *Bilinovel) getChapterByPage(chapter *model.Chapter, page int) (bool, er
 }
 
 func (b *Bilinovel) getImg(url string) ([]byte, error) {
-	if b.debug {
-		log.Printf("Getting img %v\n", url)
-	}
+	log.Printf("Getting img %v\n", url)
 	resp, err := b.restyClient.R().SetHeader("Referer", "https://www.bilinovel.com").Get(url)
 	if err != nil {
 		return nil, err
@@ -407,12 +439,14 @@ func (b *Bilinovel) getImg(url string) ([]byte, error) {
 	return resp.Body(), nil
 }
 
-func ProcessContentWithChromedp(htmlContent string) (string, error) {
+// processContentWithChromedp 使用复用的浏览器实例处理内容
+func (b *Bilinovel) processContentWithChromedp(htmlContent string) (string, error) {
 	tempFile, err := os.CreateTemp("", "bilinovel-temp-*.html")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp file: %w", err)
 	}
 	defer os.Remove(tempFile.Name())
+
 	_, err = tempFile.WriteString(htmlContent)
 	if err != nil {
 		return "", fmt.Errorf("failed to write temp file: %w", err)
@@ -420,28 +454,13 @@ func ProcessContentWithChromedp(htmlContent string) (string, error) {
 	tempFile.Close()
 	tempFilePath := tempFile.Name()
 
-	// 创建chromedp选项
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", true),
-		chromedp.Flag("disable-gpu", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.Flag("disable-extensions", true),
-		chromedp.Flag("no-sandbox", true),
-	)
-
-	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
-	defer cancel()
-
-	ctx, cancel := chromedp.NewContext(allocCtx)
-	defer cancel()
-
-	// 设置超时
-	ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+	// 为当前任务创建子上下文
+	ctx, cancel := context.WithTimeout(b.browserCtx, 30*time.Second)
 	defer cancel()
 
 	var processedHTML string
 
-	// 3. 执行chromedp任务并获取页面代码
+	// 执行处理任务
 	err = chromedp.Run(ctx,
 		network.Enable(),
 
