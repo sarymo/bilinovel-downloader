@@ -339,6 +339,8 @@ func addDirContentToZip(zipWriter *zip.Writer, dirPath string, method uint16) er
 			return err
 		}
 
+        relPath = filepath.ToSlash(relPath)
+
 		file, err := os.Open(filePath)
 		if err != nil {
 			return err
