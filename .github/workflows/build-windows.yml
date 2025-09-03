@@ -1,0 +1,58 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:       # 手动在 Actions 里点“Run workflow”
+  push:
+    branches: [ main ]     # 推送到 main 时自动构建
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        arch: [amd64, 386]   # 同时编 amd64 (64位) 和 386 (32位)
+    env:
+      GOOS: windows
+      CGO_ENABLED: 0
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+          cache: true
+
+      - name: Build (${{ matrix.arch }})
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (!(Test-Path dist)) { New-Item -ItemType Directory dist | Out-Null }
+
+          # 指定目标架构
+          go env -w GOARCH=${{ matrix.arch }}
+
+          # 入口在仓库根目录（包含 main.go），不要用 ./cmd
+          go build -trimpath -ldflags "-s -w" -o dist/bilinovel-${{ matrix.arch }}.exe .
+
+      - name: Verify PE signature (${{ matrix.arch }})
+        shell: pwsh
+        run: |
+          $p = "dist/bilinovel-${{ matrix.arch }}.exe"
+          if (!(Test-Path $p)) { throw "Build output not found: $p" }
+          Get-Item $p | Format-List Length, FullName
+          $fs = [IO.File]::OpenRead($p)
+          $b = New-Object byte[] 2
+          $null = $fs.Read($b,0,2)
+          $fs.Close()
+          $sig = ([char]$b[0]).ToString() + ([char]$b[1]).ToString()
+          if ($sig -ne 'MZ') { throw "Not a Windows PE executable (signature=$sig)" }
+
+      - name: Upload artifact (${{ matrix.arch }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: bilinovel-windows-${{ matrix.arch }}
+          path: dist/bilinovel-${{ matrix.arch }}.exe
+          if-no-files-found: error
