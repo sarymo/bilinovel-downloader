@@ -11,6 +11,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -41,25 +43,94 @@ func PackVolumeToEpub(volume *model.Volume, outputPath string, styleCSS string, 
 		}
 	}
 
+	// ========== 选封面：使用「插图/口絵/口绘/插畫/插画」章节的第一张 ==========
+	coverPicked := false
+	reImg := regexp.MustCompile(`(?is)<img[^>]+src=['"]([^'"]+)['"][^>]*>`)
+	isIllustration := func(title string) bool {
+		return strings.Contains(title, "插图") ||
+			strings.Contains(title, "插畫") ||
+			strings.Contains(title, "插画") ||
+			strings.Contains(title, "口絵") ||
+			strings.Contains(title, "口绘")
+	}
+
+	for i := range volume.Chapters {
+		chapter := volume.Chapters[i] // *model.Chapter
+		if coverPicked || chapter == nil {
+			continue
+		}
+		if !isIllustration(chapter.Title) {
+			continue
+		}
+
+		// 优先：按该章 HTML 中 <img> 的先后顺序，找到第一张能与 Images 匹配的图片
+		var chosenKey, chosenSrc string
+		if matches := reImg.FindAllStringSubmatch(chapter.Content.Html, -1); len(matches) > 0 {
+			for _, mm := range matches {
+				if len(mm) >= 2 {
+					src := mm[1]
+					base := filepath.Base(src)
+					for k := range chapter.Content.Images {
+						if filepath.Base(k) == base {
+							chosenKey = k
+							chosenSrc = src
+							break
+						}
+					}
+					if chosenKey != "" {
+						break
+					}
+				}
+			}
+		}
+
+		// 兜底：按文件名单序取第一张
+		if chosenKey == "" {
+			keys := make([]string, 0, len(chapter.Content.Images))
+			for k := range chapter.Content.Images {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			if len(keys) > 0 {
+				chosenKey = keys[0]
+				chosenSrc = chosenKey
+			}
+		}
+
+		// 只设置封面，不改动章节 HTML 或 Images
+		if chosenKey != "" {
+			if data := chapter.Content.Images[chosenKey]; len(data) > 0 {
+				volume.Cover = data
+				volume.CoverUrl = chosenSrc // 用于推断封面扩展名
+				coverPicked = true
+				break
+			}
+		}
+	}
+	// ============================================================
+
 	// 将文字写入 OEBPS/Text/chapter-%03v.xhtml
 	// 将图片写入 OEBPS/Images/chapter-%03v/
-	for i, chapter := range volume.Chapters {
-		imageNames := make([]string, 0)
+	for i := range volume.Chapters {
+		chapter := volume.Chapters[i] // *model.Chapter
+		if chapter == nil {
+			continue
+		}
+
+		imageNames := make([]string, 0, len(chapter.Content.Images))
 		for imgName, imgData := range chapter.Content.Images {
 			imageNames = append(imageNames, imgName)
 			imgPath := filepath.Join(outputPath, fmt.Sprintf("OEBPS/Images/chapter-%03v/%s", i, imgName))
-			err := os.MkdirAll(filepath.Dir(imgPath), 0755)
-			if err != nil {
+			if err := os.MkdirAll(filepath.Dir(imgPath), 0755); err != nil {
 				return fmt.Errorf("failed to create image directory: %v", err)
 			}
-			err = os.WriteFile(imgPath, imgData, 0644)
-			if err != nil {
+			if err := os.WriteFile(imgPath, imgData, 0644); err != nil {
 				return fmt.Errorf("failed to write image: %v", err)
 			}
 		}
+
 		chapterPath := filepath.Join(outputPath, fmt.Sprintf("OEBPS/Text/chapter-%03v.xhtml", i))
-		err = os.MkdirAll(filepath.Dir(chapterPath), 0755)
-		if err != nil {
+		if err := os.MkdirAll(filepath.Dir(chapterPath), 0755); err != nil {
 			return fmt.Errorf("failed to create chapter directory: %v", err)
 		}
 		file, err := os.Create(chapterPath)
@@ -67,20 +138,19 @@ func PackVolumeToEpub(volume *model.Volume, outputPath string, styleCSS string, 
 			return fmt.Errorf("failed to create chapter file: %v", err)
 		}
 		defer file.Close()
+
 		text := chapter.Content.Html
 		for _, imgName := range imageNames {
 			text = strings.ReplaceAll(text, imgName, fmt.Sprintf("../Images/chapter-%03v/%s", i, imgName))
 		}
-		err = template.ContentXHTML(chapter.Title, text).Render(context.Background(), file)
-		if err != nil {
+		if err := template.ContentXHTML(chapter.Title, text).Render(context.Background(), file); err != nil {
 			return fmt.Errorf("failed to write chapter: %v", err)
 		}
 	}
 
 	// 将 Cover 写入
 	coverPath := filepath.Join(outputPath, fmt.Sprintf("cover%s", filepath.Ext(volume.CoverUrl)))
-	err = os.WriteFile(coverPath, volume.Cover, 0644)
-	if err != nil {
+	if err := os.WriteFile(coverPath, volume.Cover, 0644); err != nil {
 		return fmt.Errorf("failed to write cover: %v", err)
 	}
 
@@ -91,8 +161,7 @@ func PackVolumeToEpub(volume *model.Volume, outputPath string, styleCSS string, 
 		return fmt.Errorf("failed to create cover XHTML file: %v", err)
 	}
 	defer file.Close()
-	err = template.CoverXHTML(fmt.Sprintf("../../%s", filepath.Base(coverPath))).Render(context.Background(), file)
-	if err != nil {
+	if err := template.CoverXHTML(fmt.Sprintf("../../%s", filepath.Base(coverPath))).Render(context.Background(), file); err != nil {
 		return fmt.Errorf("failed to render cover XHTML: %v", err)
 	}
 
@@ -111,15 +180,13 @@ func PackVolumeToEpub(volume *model.Volume, outputPath string, styleCSS string, 
 	}
 	contents.WriteString(`</ol>`)
 	contents.WriteString(`</nav>`)
-	err = template.ContentXHTML("目录", contents.String()).Render(context.Background(), file)
-	if err != nil {
+	if err := template.ContentXHTML("目录", contents.String()).Render(context.Background(), file); err != nil {
 		return fmt.Errorf("failed to render contents XHTML: %v", err)
 	}
 
 	// ContainerXML
 	containerPath := filepath.Join(outputPath, "META-INF/container.xml")
-	err = os.MkdirAll(filepath.Dir(containerPath), 0755)
-	if err != nil {
+	if err := os.MkdirAll(filepath.Dir(containerPath), 0755); err != nil {
 		return fmt.Errorf("failed to create container directory: %v", err)
 	}
 	file, err = os.Create(containerPath)
@@ -127,37 +194,32 @@ func PackVolumeToEpub(volume *model.Volume, outputPath string, styleCSS string, 
 		return fmt.Errorf("failed to create container file: %v", err)
 	}
 	defer file.Close()
-	err = template.ContainerXML().Render(context.Background(), file)
-	if err != nil {
+	if err := template.ContainerXML().Render(context.Background(), file); err != nil {
 		return fmt.Errorf("failed to render container: %v", err)
 	}
 
 	// ContentOPF
 	u := uuid.New()
-	err = CreateContentOPF(outputPath, u.String(), volume, extraFiles)
-	if err != nil {
+	if err := CreateContentOPF(outputPath, u.String(), volume, extraFiles); err != nil {
 		return fmt.Errorf("failed to create content OPF: %v", err)
 	}
 
 	// 写入 CSS
 	cssPath := filepath.Join(outputPath, "style.css")
-	err = os.WriteFile(cssPath, []byte(styleCSS), 0644)
-	if err != nil {
+	if err := os.WriteFile(cssPath, []byte(styleCSS), 0644); err != nil {
 		return fmt.Errorf("failed to write CSS: %v", err)
 	}
 
 	// 写入 extraFiles
 	for _, file := range extraFiles {
 		extraFilePath := filepath.Join(outputPath, file.Path)
-		err = os.WriteFile(extraFilePath, file.Data, 0644)
-		if err != nil {
+		if err := os.WriteFile(extraFilePath, file.Data, 0644); err != nil {
 			return fmt.Errorf("failed to write extra file: %v", err)
 		}
 	}
 
 	// 打包成 epub 文件
-	err = PackEpub(outputPath)
-	if err != nil {
+	if err := PackEpub(outputPath); err != nil {
 		return fmt.Errorf("failed to pack epub: %v", err)
 	}
 	return nil
@@ -269,16 +331,14 @@ func CreateContentOPF(outputPath string, uuid string, volume *model.Volume, extr
 		}
 	}
 	contentOPFPath := filepath.Join(outputPath, "content.opf")
-	err := os.MkdirAll(path.Dir(contentOPFPath), 0755)
-	if err != nil {
+	if err := os.MkdirAll(path.Dir(contentOPFPath), 0755); err != nil {
 		return fmt.Errorf("failed to create content directory: %v", err)
 	}
 	file, err := os.Create(contentOPFPath)
 	if err != nil {
 		return fmt.Errorf("failed to create content file: %v", err)
 	}
-	err = template.ContentOPF("book-id", dc, manifest, spine, nil).Render(context.Background(), file)
-	if err != nil {
+	if err := template.ContentOPF("book-id", dc, manifest, spine, nil).Render(context.Background(), file); err != nil {
 		return fmt.Errorf("failed to render content: %v", err)
 	}
 	return nil
@@ -295,16 +355,13 @@ func PackEpub(dirPath string) error {
 	zipWriter := zip.NewWriter(zipFile)
 	defer zipWriter.Close()
 
-	err = addStringToZip(zipWriter, "mimetype", "application/epub+zip", zip.Store)
-	if err != nil {
+	if err := addStringToZip(zipWriter, "mimetype", "application/epub+zip", zip.Store); err != nil {
 		return err
 	}
 
-	err = addDirContentToZip(zipWriter, dirPath, zip.Deflate)
-	if err != nil {
+	if err := addDirContentToZip(zipWriter, dirPath, zip.Deflate); err != nil {
 		return err
 	}
-
 	return nil
 }
 
@@ -317,7 +374,6 @@ func addStringToZip(zipWriter *zip.Writer, relPath, content string, method uint1
 	if err != nil {
 		return err
 	}
-
 	_, err = writer.Write([]byte(content))
 	return err
 }
@@ -334,12 +390,13 @@ func addDirContentToZip(zipWriter *zip.Writer, dirPath string, method uint16) er
 			return nil
 		}
 
+		// 先计算相对路径
 		relPath, err := filepath.Rel(dirPath, filePath)
 		if err != nil {
 			return err
 		}
-
-        relPath = filepath.ToSlash(relPath)
+		// 将反斜杠转换为正斜杠，符合 EPUB 规范
+		relPath = filepath.ToSlash(relPath)
 
 		file, err := os.Open(filePath)
 		if err != nil {
